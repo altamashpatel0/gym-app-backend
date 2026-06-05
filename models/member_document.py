@@ -22,5 +22,5 @@ class MemberDocument(Base):
     mime_type = Column(String(100), nullable=True)               # stored MIME type
     uploaded_at = Column(DateTime, server_default=func.now(), nullable=False)
 
-    # Relationship back to Member (optional, read-only)
+    # back_populates="documents" matches Member.documents
     member = relationship("Member", back_populates="documents")

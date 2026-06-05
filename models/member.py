@@ -17,8 +17,8 @@ class Member(Base):
     plan_id = Column(Integer, ForeignKey("plans.id"))
     join_date = Column(Date, server_default=func.current_date())
     renewal_date = Column(Date)
-    plan_start_date = Column(Date, nullable=True)   # NEW: when current plan started
-    plan_end_date = Column(Date, nullable=True)     # NEW: when current plan expires
+    plan_start_date = Column(Date, nullable=True)   # when current plan started
+    plan_end_date = Column(Date, nullable=True)     # when current plan expires
     status = Column(String(20), default="active")  # active|expired|paused
     assigned_trainer_id = Column(Integer, ForeignKey("users.id"))
     created_by = Column(Integer, ForeignKey("users.id"))
@@ -30,9 +30,10 @@ class Member(Base):
     payments = relationship("Payment", back_populates="member")
     attendance = relationship("Attendance", back_populates="member")
 
-documents = relationship(
-    "MemberDocument",
-    back_populates="member",
-    cascade="all, delete-orphan",
-    lazy="dynamic",
-)
+    # FIX: was defined outside the class body — SQLAlchemy never registered it
+    documents = relationship(
+        "MemberDocument",
+        back_populates="member",
+        cascade="all, delete-orphan",
+        lazy="dynamic",
+    )
