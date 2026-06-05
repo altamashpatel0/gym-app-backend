@@ -11,15 +11,14 @@ from routers.dashboard import router as dashboard_router
 from routers.reports import router as reports_router
 from routers.notifications import router as notifications_router
 
-# Create all tables
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="GymOps API", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
