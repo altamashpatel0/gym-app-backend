@@ -9,3 +9,7 @@ passlib==1.7.4
 bcrypt==4.0.1
 python-multipart==0.0.9
 python-dotenv==1.0.1
+google-auth==2.29.0
+google-auth-httplib2==0.2.0
+google-api-python-client==2.131.0
+python-magic==0.4.27

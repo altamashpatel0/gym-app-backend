@@ -29,3 +29,10 @@ class Member(Base):
     trainer = relationship("User", foreign_keys=[assigned_trainer_id])
     payments = relationship("Payment", back_populates="member")
     attendance = relationship("Attendance", back_populates="member")
+
+documents = relationship(
+    "MemberDocument",
+    back_populates="member",
+    cascade="all, delete-orphan",
+    lazy="dynamic",
+)
