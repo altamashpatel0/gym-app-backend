@@ -6,11 +6,46 @@ Google Drive storage backend for GymOps.
 Reads credentials from the GOOGLE_DRIVE_CREDENTIALS_JSON environment variable
 (a JSON string containing a service-account key).  No hardcoded paths.
 
-Folder layout on Drive:
-    GymManagementTool/
+Folder layout on Drive (rooted at the shared folder in GOOGLE_DRIVE_ROOT_FOLDER_ID):
+    <shared-root>/
         Members/
             Photos/
             Documents/
+
+ROOT CAUSE FIX (storageQuotaExceeded / 403)
+--------------------------------------------
+The Google Drive v3 API distinguishes between two storage contexts:
+
+  1. My Drive  — belongs to a regular Google account; has quota.
+  2. Shared Drive (a.k.a. Team Drive) — quota lives on the *domain/org*,
+     not on any individual user or service account.
+
+When a service account calls files().create() WITHOUT the
+``supportsAllDrives=True`` parameter, the Drive API silently treats the
+request as targeting *My Drive* — the service-account's own storage space.
+Service accounts have **zero** quota on My Drive, so every write immediately
+raises:
+
+    HttpError 403: Service Accounts do not have storage quota
+                   (storageQuotaExceeded)
+
+This happens even when ``parents`` correctly points at a folder inside a
+Shared Drive, because the API ignores that parent and writes to the
+service-account root first, then tries (and fails) to count quota.
+
+The fix is to add ``supportsAllDrives=True`` to EVERY Drive API call that
+reads or writes file/folder resources:
+
+  • files().list()
+  • files().create()
+  • files().delete()
+  • permissions().create()
+
+Additionally, files().list() needs ``includeItemsFromAllDrives=True`` so that
+folder-existence queries actually see items inside a Shared Drive; without it
+the query always returns an empty list, causing the code to re-create the
+same folder on every cold start (each new folder lands in the wrong place and
+eventually triggers the quota error on its first upload).
 """
 
 from __future__ import annotations
@@ -35,7 +70,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 SCOPES = ["https://www.googleapis.com/auth/drive"]
 
-ROOT_FOLDER_NAME = "GymManagementTool"
+ROOT_FOLDER_NAME = "GymManagementTool"   # kept for reference only
 MEMBERS_FOLDER_NAME = "Members"
 PHOTOS_FOLDER_NAME = "Photos"
 DOCUMENTS_FOLDER_NAME = "Documents"
@@ -90,16 +125,11 @@ def sanitize_filename(filename: str) -> str:
     - Collapse consecutive dots (prevent double-extension tricks)
     - Limit total length
     """
-    # Strip leading/trailing whitespace and path separators
     filename = os.path.basename(filename.strip())
-    # Normalise unicode characters
     filename = unicodedata.normalize("NFKD", filename)
     filename = filename.encode("ascii", "ignore").decode("ascii")
-    # Replace whitespace and forbidden chars
     filename = re.sub(r"[^\w.\-]", "_", filename)
-    # Collapse consecutive dots
     filename = re.sub(r"\.{2,}", ".", filename)
-    # Limit length (keep extension)
     name, _, ext = filename.rpartition(".")
     name = name[:100]
     ext = ext[:10]
@@ -146,11 +176,48 @@ class GoogleDriveService:
         return self._service
 
     # ------------------------------------------------------------------
+    # Root folder
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _get_root_folder_id() -> str:
+        """
+        Return the shared Drive folder ID from the environment.
+
+        This folder must already exist and have been shared with the service
+        account.  We never create a folder at the service-account root level
+        because service accounts have no storage quota of their own.
+        """
+        folder_id = os.environ.get("GOOGLE_DRIVE_ROOT_FOLDER_ID", "").strip()
+        if not folder_id:
+            raise RuntimeError(
+                "GOOGLE_DRIVE_ROOT_FOLDER_ID environment variable is not set."
+            )
+        return folder_id
+
+    # ------------------------------------------------------------------
     # Folder helpers
     # ------------------------------------------------------------------
 
     def _get_or_create_folder(self, name: str, parent_id: Optional[str] = None) -> str:
-        """Return the Drive folder ID for *name*, creating it if absent."""
+        """Return the Drive folder ID for *name*, creating it if absent.
+
+        *parent_id* is required — passing None would create a folder in the
+        service account's root drive, which has no storage quota.
+
+        FIX: Every files().list() and files().create() call now carries:
+          • supportsAllDrives=True        — allows write access to Shared Drives
+          • includeItemsFromAllDrives=True — allows the list query to see items
+                                            that live inside a Shared Drive
+        Without these flags the Drive API treats every request as targeting
+        My Drive (the service account's own quota-less storage).
+        """
+        if parent_id is None:
+            raise ValueError(
+                "_get_or_create_folder() requires a parent_id. "
+                "Use _get_root_folder_id() to obtain the shared root."
+            )
+
         cache_key = f"{parent_id}:{name}"
         if cache_key in self._folder_cache:
             return self._folder_cache[cache_key]
@@ -161,13 +228,20 @@ class GoogleDriveService:
             f"name = '{name}'",
             "mimeType = 'application/vnd.google-apps.folder'",
             "trashed = false",
+            f"'{parent_id}' in parents",
         ]
-        if parent_id:
-            query_parts.append(f"'{parent_id}' in parents")
 
+        # FIX 1: added supportsAllDrives + includeItemsFromAllDrives so the
+        # query actually searches inside the Shared Drive.
         results = (
             service.files()
-            .list(q=" and ".join(query_parts), fields="files(id, name)", pageSize=1)
+            .list(
+                q=" and ".join(query_parts),
+                fields="files(id, name)",
+                pageSize=1,
+                supportsAllDrives=True,           # FIX 1a
+                includeItemsFromAllDrives=True,   # FIX 1b
+            )
             .execute()
         )
         files = results.get("files", [])
@@ -178,22 +252,27 @@ class GoogleDriveService:
             metadata: dict = {
                 "name": name,
                 "mimeType": "application/vnd.google-apps.folder",
+                "parents": [parent_id],
             }
-            if parent_id:
-                metadata["parents"] = [parent_id]
-            folder = service.files().create(body=metadata, fields="id").execute()
+            # FIX 2: added supportsAllDrives so the folder is created inside
+            # the Shared Drive rather than the service account's My Drive.
+            folder = (
+                service.files()
+                .create(body=metadata, fields="id", supportsAllDrives=True)  # FIX 2
+                .execute()
+            )
             folder_id = folder["id"]
 
         self._folder_cache[cache_key] = folder_id
         return folder_id
 
     def _get_photos_folder_id(self) -> str:
-        root_id = self._get_or_create_folder(ROOT_FOLDER_NAME)
+        root_id = self._get_root_folder_id()
         members_id = self._get_or_create_folder(MEMBERS_FOLDER_NAME, root_id)
         return self._get_or_create_folder(PHOTOS_FOLDER_NAME, members_id)
 
     def _get_documents_folder_id(self) -> str:
-        root_id = self._get_or_create_folder(ROOT_FOLDER_NAME)
+        root_id = self._get_root_folder_id()
         members_id = self._get_or_create_folder(MEMBERS_FOLDER_NAME, root_id)
         return self._get_or_create_folder(DOCUMENTS_FOLDER_NAME, members_id)
 
@@ -222,7 +301,6 @@ class GoogleDriveService:
         -------
         dict with keys: file_id, view_url, download_url, filename
         """
-        # Security checks
         self._validate_file(file_bytes, mime_type, folder)
 
         safe_name = sanitize_filename(filename)
@@ -239,14 +317,20 @@ class GoogleDriveService:
             io.BytesIO(file_bytes), mimetype=mime_type, resumable=False
         )
 
+        # FIX 3: added supportsAllDrives so the file upload targets the Shared
+        # Drive rather than the service account's quota-less My Drive.
         uploaded = (
             service.files()
-            .create(body=file_metadata, media_body=media, fields="id, name")
+            .create(
+                body=file_metadata,
+                media_body=media,
+                fields="id, name",
+                supportsAllDrives=True,   # FIX 3
+            )
             .execute()
         )
         file_id = uploaded["id"]
 
-        # Make file publicly readable
         self._make_public(file_id)
 
         view_url, download_url = self._build_urls(file_id, mime_type)
@@ -265,7 +349,12 @@ class GoogleDriveService:
         Returns True on success, False if not found.
         """
         try:
-            self._get_service().files().delete(fileId=file_id).execute()
+            # FIX 4: added supportsAllDrives so deletion works on Shared Drive
+            # files (without it the call raises 404 even for existing files).
+            self._get_service().files().delete(
+                fileId=file_id,
+                supportsAllDrives=True,   # FIX 4
+            ).execute()
             return True
         except HttpError as exc:
             if exc.resp.status == 404:
@@ -283,9 +372,12 @@ class GoogleDriveService:
 
     def _make_public(self, file_id: str) -> None:
         """Grant 'anyone with the link can view' permission."""
+        # FIX 5: added supportsAllDrives so the permissions call succeeds for
+        # files that live inside a Shared Drive.
         self._get_service().permissions().create(
             fileId=file_id,
             body={"type": "anyone", "role": "reader"},
+            supportsAllDrives=True,   # FIX 5
         ).execute()
 
     @staticmethod
@@ -308,17 +400,14 @@ class GoogleDriveService:
     @staticmethod
     def _validate_file(file_bytes: bytes, mime_type: str, folder: str) -> None:
         """Raise ValueError on any security violation."""
-        # Size check
         if len(file_bytes) > MAX_FILE_SIZE_BYTES:
             raise ValueError(
                 f"File size {len(file_bytes) / 1_048_576:.1f} MB exceeds the 10 MB limit."
             )
 
-        # Blocked MIME types (executables, archives, scripts)
         if mime_type in BLOCKED_MIMES:
             raise ValueError(f"File type '{mime_type}' is not allowed.")
 
-        # Allowed-list check per folder type
         if folder == "photos" and mime_type not in ALLOWED_IMAGE_MIMES:
             raise ValueError(
                 f"'{mime_type}' is not an allowed image type. "
