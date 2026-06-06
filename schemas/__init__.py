@@ -105,6 +105,7 @@ class MemberOut(BaseModel):
     address: Optional[str]
     dob: Optional[date]
     gender: Optional[str]
+    photo_url: Optional[str] = None
     plan_id: Optional[int]
     join_date: Optional[date]
     renewal_date: Optional[date]
