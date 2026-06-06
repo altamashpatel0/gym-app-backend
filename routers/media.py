@@ -7,13 +7,13 @@ Handles:
   GET    /api/members/{member_id}/documents
   DELETE /api/documents/{document_id}
 
-All existing routes are untouched.  This router adds only new paths.
+Storage backend: Cloudinary (replaces Google Drive).
+All route paths and response schemas are unchanged.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Literal
 
 import magic  # python-magic: MIME detection from file bytes (not filename)
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
@@ -28,11 +28,11 @@ from schemas.media import (
     MemberDocumentOut,
     PhotoUploadResponse,
 )
-from services.google_drive import (
+from services.cloudinary_storage import (
     ALLOWED_DOCUMENT_MIMES,
     ALLOWED_IMAGE_MIMES,
     MAX_FILE_SIZE_BYTES,
-    get_drive_service,
+    get_cloudinary_service,
 )
 
 logger = logging.getLogger(__name__)
@@ -64,7 +64,6 @@ def _detect_mime(file_bytes: bytes) -> str:
 
 def _read_upload(upload: UploadFile, max_bytes: int = MAX_FILE_SIZE_BYTES) -> bytes:
     """Read UploadFile into bytes, enforcing size limit."""
-    # Read in one shot; for large files Starlette streams, but 10 MB is small
     contents = upload.file.read()
     if len(contents) > max_bytes:
         raise HTTPException(
@@ -85,8 +84,8 @@ def _read_upload(upload: UploadFile, max_bytes: int = MAX_FILE_SIZE_BYTES) -> by
     summary="Upload or replace a member's profile photo",
     description=(
         "Accepts jpg / jpeg / png / webp, max 10 MB. "
-        "Stores the image in Google Drive (GymManagementTool/Members/Photos/) "
-        "and saves the public URL in the member record."
+        "Stores the image in Cloudinary (gym_management/members/photos/) "
+        "and saves the secure URL in the member record."
     ),
     status_code=status.HTTP_200_OK,
 )
@@ -115,19 +114,22 @@ async def upload_member_photo(
             ),
         )
 
-    drive = get_drive_service()
+    storage = get_cloudinary_service()
 
-    # Delete old photo from Drive if it exists
-    if member.photo_url and "id=" in member.photo_url:
+    # Delete old photo from Cloudinary if a public_id is stored.
+    # The member model stores the secure_url in photo_url; the public_id for
+    # the old photo is stored in photo_drive_file_id (or photo_public_id if
+    # you rename the column).  Fall back to attempting a delete via
+    # photo_drive_file_id when it exists.
+    if getattr(member, "photo_drive_file_id", None):
         try:
-            old_file_id = member.photo_url.split("id=")[1].split("&")[0]
-            drive.delete_file(old_file_id)
+            storage.delete_file(member.photo_drive_file_id)
         except Exception as exc:
-            logger.warning("Could not delete old photo from Drive: %s", exc)
+            logger.warning("Could not delete old photo from Cloudinary: %s", exc)
 
     # Upload new photo
     try:
-        result = drive.upload_file(
+        result = storage.upload_file(
             file_bytes=file_bytes,
             filename=photo.filename or f"member_{member_id}_photo",
             mime_type=mime_type,
@@ -136,11 +138,13 @@ async def upload_member_photo(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
-        logger.exception("Drive upload failed: %s", exc)
+        logger.exception("Cloudinary upload failed: %s", exc)
         raise HTTPException(status_code=502, detail="Failed to upload photo to storage.")
 
-    # Persist view URL
-    member.photo_url = result["view_url"]
+    # Persist URLs and public_id
+    member.photo_url = result["view_url"]                    # secure_url saved to DB
+    if hasattr(member, "photo_drive_file_id"):
+        member.photo_drive_file_id = result["file_id"]      # public_id for future deletion
     db.commit()
     db.refresh(member)
 
@@ -202,10 +206,10 @@ async def upload_member_document(
             ),
         )
 
-    drive = get_drive_service()
+    storage = get_cloudinary_service()
 
     try:
-        result = drive.upload_file(
+        result = storage.upload_file(
             file_bytes=file_bytes,
             filename=document.filename or f"member_{member_id}_doc",
             mime_type=mime_type,
@@ -214,22 +218,27 @@ async def upload_member_document(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
-        logger.exception("Drive upload failed: %s", exc)
+        logger.exception("Cloudinary upload failed: %s", exc)
         raise HTTPException(status_code=502, detail="Failed to upload document to storage.")
 
     doc = MemberDocument(
         member_id=member_id,
         document_name=document_name.strip(),
         document_type=document_type.lower(),
-        file_url=result["view_url"],
+        file_url=result["view_url"],          # Cloudinary secure_url
         download_url=result["download_url"],
-        drive_file_id=result["file_id"],
+        drive_file_id=result["file_id"],      # stores Cloudinary public_id
         mime_type=mime_type,
     )
     db.add(doc)
     db.commit()
     db.refresh(doc)
     return doc
+
+
+# ---------------------------------------------------------------------------
+# FEATURE 3 — List member documents
+# ---------------------------------------------------------------------------
 
 
 @router.get(
@@ -253,11 +262,16 @@ def list_member_documents(
     return MemberDocumentListOut(items=docs, total=len(docs))
 
 
+# ---------------------------------------------------------------------------
+# FEATURE 4 — Delete a document
+# ---------------------------------------------------------------------------
+
+
 @router.delete(
     "/api/documents/{document_id}",
     response_model=DocumentDeleteResponse,
     summary="Delete a member document",
-    description="Deletes the document record and removes the file from Google Drive.",
+    description="Deletes the document record and removes the file from Cloudinary.",
 )
 def delete_document(
     document_id: int,
@@ -268,12 +282,14 @@ def delete_document(
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found.")
 
-    # Remove from Drive
+    # Remove from Cloudinary using the stored public_id (drive_file_id column)
     if doc.drive_file_id:
         try:
-            get_drive_service().delete_file(doc.drive_file_id)
+            get_cloudinary_service().delete_file(doc.drive_file_id)
         except Exception as exc:
-            logger.warning("Could not delete Drive file %s: %s", doc.drive_file_id, exc)
+            logger.warning(
+                "Could not delete Cloudinary asset %s: %s", doc.drive_file_id, exc
+            )
 
     db.delete(doc)
     db.commit()
