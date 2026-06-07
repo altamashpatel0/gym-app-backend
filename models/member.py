@@ -11,7 +11,7 @@ class Member(Base):
     email = Column(String(150))
     phone = Column(String(20), nullable=False)
     address = Column(Text)
-    dob = Column(Date)
+    age = Column(Integer, nullable=True)
     gender = Column(String(10))
     photo_url = Column(Text)
     plan_id = Column(Integer, ForeignKey("plans.id"))

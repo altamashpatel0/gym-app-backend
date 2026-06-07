@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 from typing import Optional, List
 from datetime import date, datetime
 from decimal import Decimal
@@ -77,7 +77,7 @@ class MemberCreate(BaseModel):
     phone: str
     email: Optional[str] = None
     address: Optional[str] = None
-    dob: Optional[date] = None
+    age: Optional[int] = Field(None, ge=1, le=120)
     gender: Optional[str] = None
     plan_id: Optional[int] = None
     join_date: Optional[date] = None
@@ -89,7 +89,7 @@ class MemberUpdate(BaseModel):
     phone: Optional[str] = None
     email: Optional[str] = None
     address: Optional[str] = None
-    dob: Optional[date] = None
+    age: Optional[int] = Field(None, ge=1, le=120)
     gender: Optional[str] = None
     plan_id: Optional[int] = None
     join_date: Optional[date] = None
@@ -103,7 +103,7 @@ class MemberOut(BaseModel):
     phone: str
     email: Optional[str]
     address: Optional[str]
-    dob: Optional[date]
+    age: Optional[int]
     gender: Optional[str]
     photo_url: Optional[str] = None
     plan_id: Optional[int]
@@ -169,7 +169,7 @@ class PendingDue(BaseModel):
     plan_name: Optional[str]
     days_overdue: Optional[int]
 
-# NEW: due members (expired plan)
+# due members (expired plan)
 class DueMemberOut(BaseModel):
     member_id: int
     name: str
@@ -179,7 +179,7 @@ class DueMemberOut(BaseModel):
     plan_end_date: Optional[date]
     days_overdue: Optional[int]
 
-# NEW: expiring members
+# expiring members
 class ExpiringMemberOut(BaseModel):
     member_id: int
     name: str
