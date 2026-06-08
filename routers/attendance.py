@@ -67,3 +67,13 @@ def checkout(attendance_id: int, db: Session = Depends(get_db), _=Depends(get_cu
     record.check_out = datetime.utcnow()
     db.commit()
     return {"message": "Checked out"}
+
+
+@router.delete("/{attendance_id}")
+def delete_attendance(attendance_id: int, db: Session = Depends(get_db), _=Depends(get_current_user)):
+    record = db.query(Attendance).filter(Attendance.id == attendance_id).first()
+    if not record:
+        raise HTTPException(404, "Not found")
+    db.delete(record)
+    db.commit()
+    return {"message": "Attendance deleted"}
