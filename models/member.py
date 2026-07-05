@@ -1,37 +1,39 @@
-import enum
-from sqlalchemy import Column, Integer, String, Date, Enum as SAEnum
-from database import Base          # adjust import path to match your project
-
-
-class ShiftEnum(str, enum.Enum):
-    """Allowed shift values — keep in sync with frontend SHIFT_VALUES constant."""
-    DAY   = "Day"
-    NIGHT = "Night"
+from sqlalchemy import Column, Integer, String, Boolean, Date, DateTime, Text, ForeignKey, func
+from sqlalchemy.orm import relationship
+from database import Base
 
 
 class Member(Base):
     __tablename__ = "members"
 
-    id                  = Column(Integer, primary_key=True, index=True)
-    name                = Column(String,  nullable=False)
-    phone               = Column(String,  nullable=False, index=True)
-    email               = Column(String,  nullable=True)
-    address             = Column(String,  nullable=True)
-    dob                 = Column(Date,    nullable=True)
-    age                 = Column(Integer, nullable=True)
-    gender              = Column(String,  nullable=True)
-    status              = Column(String,  default="active")
-    plan_id             = Column(Integer, nullable=True)          # FK in full model
-    join_date           = Column(Date,    nullable=True)
-    renewal_date        = Column(Date,    nullable=True)
-    assigned_trainer_id = Column(Integer, nullable=True)
-    photo_url           = Column(String,  nullable=True)
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(100), nullable=False)
+    email = Column(String(150))
+    phone = Column(String(20), nullable=False)
+    address = Column(Text)
+    age = Column(Integer, nullable=True)
+    gender = Column(String(10))
+    photo_url = Column(Text)
+    plan_id = Column(Integer, ForeignKey("plans.id"))
+    join_date = Column(Date, server_default=func.current_date())
+    renewal_date = Column(Date)
+    plan_start_date = Column(Date, nullable=True)   # when current plan started
+    plan_end_date = Column(Date, nullable=True)     # when current plan expires
+    status = Column(String(20), default="active")  # active|expired|paused
+    assigned_trainer_id = Column(Integer, ForeignKey("users.id"))
+    created_by = Column(Integer, ForeignKey("users.id"))
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
-    # server_default ensures existing DB rows silently become "Day" with no
-    # data-loss migration. The Python-level default handles ORM-created objects.
-    shift = Column(
-        String,
-        nullable=False,
-        default=ShiftEnum.DAY.value,
-        server_default=ShiftEnum.DAY.value,
+    plan = relationship("Plan", back_populates="members")
+    trainer = relationship("User", foreign_keys=[assigned_trainer_id])
+    payments = relationship("Payment", back_populates="member")
+    attendance = relationship("Attendance", back_populates="member")
+
+    # FIX: was defined outside the class body — SQLAlchemy never registered it
+    documents = relationship(
+        "MemberDocument",
+        back_populates="member",
+        cascade="all, delete-orphan",
+        lazy="dynamic",
     )
