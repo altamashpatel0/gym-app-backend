@@ -1,7 +1,25 @@
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 from typing import Optional, List
 from datetime import date, datetime
 from decimal import Decimal
+
+# Allowed values for Member.shift. Kept as a simple tuple (not a DB enum)
+# to match this codebase's existing convention for status/gender/payment_mode.
+ALLOWED_SHIFTS = ("Day", "Night")
+
+
+def _validate_shift(v):
+    """Normalize + validate a shift value against ALLOWED_SHIFTS.
+    Accepts case-insensitive input ('day', 'NIGHT', ...) and returns the
+    canonical 'Day'/'Night' form so downstream comparisons stay simple.
+    """
+    if v is None:
+        return v
+    v = str(v).strip()
+    for allowed in ALLOWED_SHIFTS:
+        if v.lower() == allowed.lower():
+            return allowed
+    raise ValueError(f"Invalid shift '{v}'. Allowed values: {', '.join(ALLOWED_SHIFTS)}")
 
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
@@ -83,6 +101,12 @@ class MemberCreate(BaseModel):
     join_date: Optional[date] = None
     renewal_date: Optional[date] = None
     assigned_trainer_id: Optional[int] = None
+    shift: str = "Day"  # NEW: every member must have a shift; defaults to Day
+
+    @field_validator("shift", mode="before")
+    @classmethod
+    def _check_shift_create(cls, v):
+        return _validate_shift(v) if v is not None else "Day"
 
 class MemberUpdate(BaseModel):
     name: Optional[str] = None
@@ -96,6 +120,12 @@ class MemberUpdate(BaseModel):
     renewal_date: Optional[date] = None
     status: Optional[str] = None
     assigned_trainer_id: Optional[int] = None
+    shift: Optional[str] = None  # NEW: optional so partial updates don't force it
+
+    @field_validator("shift", mode="before")
+    @classmethod
+    def _check_shift_update(cls, v):
+        return _validate_shift(v)
 
 class MemberOut(BaseModel):
     id: int
@@ -115,6 +145,7 @@ class MemberOut(BaseModel):
     assigned_trainer_id: Optional[int]
     plan: Optional[PlanOut]
     created_at: datetime
+    shift: str = "Day"  # NEW: always returned so the frontend can badge/filter on it
 
     class Config:
         from_attributes = True
@@ -217,6 +248,12 @@ class DashboardStats(BaseModel):
     today_collection: Decimal
     total_revenue: Decimal        # NEW: all-time revenue
     today_attendance: int
+    # NEW: Day/Night member counts. Always computed across ALL members,
+    # independent of any `shift` filter applied to the other fields above,
+    # so these two numbers stay meaningful no matter which dashboard tab
+    # ("All" / "Day" / "Night") is currently selected on the frontend.
+    day_members: int = 0
+    night_members: int = 0
 
 
 # ── Reports ───────────────────────────────────────────────────────────────────

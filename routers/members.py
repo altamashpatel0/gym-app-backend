@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import or_
+from sqlalchemy import or_, func
 from typing import Optional, List
 from datetime import date
 from database import get_db
@@ -57,6 +57,7 @@ def due_members(
 def list_members(
     search: Optional[str] = None,
     status: Optional[str] = None,
+    shift: Optional[str] = Query(None, description="Filter by shift: Day or Night"),
     page: int = 1,
     limit: int = 20,
     db: Session = Depends(get_db),
@@ -71,6 +72,11 @@ def list_members(
         ))
     if status:
         q = q.filter(Member.status == status)
+    # NEW: optional shift filter (case-insensitive) — used by the Dashboard's
+    # shift tabs (GET /api/members?shift=Day|Night). Omitted = all members,
+    # preserving prior behavior exactly.
+    if shift:
+        q = q.filter(func.lower(Member.shift) == shift.lower())
     total = q.count()
     items = q.order_by(Member.created_at.desc()).offset((page - 1) * limit).limit(limit).all()
     return MemberListOut(items=items, total=total, page=page, limit=limit)

@@ -20,6 +20,13 @@ class Member(Base):
     plan_start_date = Column(Date, nullable=True)   # when current plan started
     plan_end_date = Column(Date, nullable=True)     # when current plan expires
     status = Column(String(20), default="active")  # active|expired|paused
+    # Day/Night shift the member is assigned to. Stored as a plain validated
+    # string (same convention as `status`/`gender`/`payment_mode` elsewhere
+    # in this codebase) rather than a native DB enum, so it can be added to
+    # existing PostgreSQL databases with a simple, reversible ALTER TABLE
+    # (see migrations/002_add_shift_to_members.sql). server_default="Day"
+    # ensures every pre-existing row is backfilled automatically.
+    shift = Column(String(10), nullable=False, server_default="Day", default="Day")
     assigned_trainer_id = Column(Integer, ForeignKey("users.id"))
     created_by = Column(Integer, ForeignKey("users.id"))
     created_at = Column(DateTime, server_default=func.now())
