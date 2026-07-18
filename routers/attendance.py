@@ -2,12 +2,76 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session, joinedload
 from typing import List, Optional
 from datetime import date, datetime
+from zoneinfo import ZoneInfo
 from database import get_db
 from models import Attendance, User
-from schemas import AttendanceCreate, AttendanceOut
+from schemas import (
+    AttendanceCreate,
+    AttendanceOut,
+    CheckInRequest,
+    CheckOutRequest,
+    AttendanceRecordOut,
+    AttendanceDashboardSummary,
+)
 from core.deps import get_current_user
+from services import attendance_service
 
 router = APIRouter(prefix="/api/attendance", tags=["attendance"])
+
+# Timezone-aware India Standard Time, used instead of naive datetime.utcnow()
+# so recorded timestamps are unambiguous.
+IST = ZoneInfo("Asia/Kolkata")
+
+
+# ── Manual attendance system (check-in / check-out) ──────────────────────────
+# NEW endpoints. These live alongside the pre-existing endpoints below
+# (which remain untouched for backward compatibility) and are the surface
+# a future biometric integration would call into instead of/along with the
+# manual buttons — no DB schema changes would be required for that, since
+# it would just call attendance_service.check_in/check_out the same way.
+
+@router.post("/check-in", response_model=AttendanceRecordOut)
+def manual_check_in(
+    data: CheckInRequest,
+    db: Session = Depends(get_db),
+    _=Depends(get_current_user),
+):
+    return attendance_service.check_in(db, data.member_id)
+
+
+@router.post("/check-out", response_model=AttendanceRecordOut)
+def manual_check_out(
+    data: CheckOutRequest,
+    db: Session = Depends(get_db),
+    _=Depends(get_current_user),
+):
+    return attendance_service.check_out(db, data.member_id)
+
+
+@router.get("/dashboard-summary", response_model=AttendanceDashboardSummary)
+def attendance_dashboard_summary(
+    db: Session = Depends(get_db),
+    _=Depends(get_current_user),
+):
+    return attendance_service.get_dashboard_summary(db)
+
+
+@router.get("/member/{member_id}", response_model=Optional[AttendanceRecordOut])
+def member_today_attendance(
+    member_id: int,
+    db: Session = Depends(get_db),
+    _=Depends(get_current_user),
+):
+    return attendance_service.get_member_today(db, member_id)
+
+
+@router.get("/history/{member_id}", response_model=List[AttendanceRecordOut])
+def member_attendance_history(
+    member_id: int,
+    db: Session = Depends(get_db),
+    _=Depends(get_current_user),
+):
+    return attendance_service.get_history(db, member_id)
 
 
 @router.get("/today", response_model=List[AttendanceOut])
@@ -64,7 +128,7 @@ def checkout(attendance_id: int, db: Session = Depends(get_db), _=Depends(get_cu
     record = db.query(Attendance).filter(Attendance.id == attendance_id).first()
     if not record:
         raise HTTPException(404, "Not found")
-    record.check_out = datetime.utcnow()
+    record.check_out = datetime.now(IST)
     db.commit()
     return {"message": "Checked out"}
 

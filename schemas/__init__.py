@@ -233,9 +233,57 @@ class AttendanceOut(BaseModel):
     check_out: Optional[datetime]
     date: date
     member: Optional[MemberOut]
+    # NEW (additive, optional): surfaced so existing GET /api/attendance/today
+    # and /api/attendance list endpoints also expose the manual attendance
+    # system's status/duration without changing any existing field names or
+    # shapes. Old clients that ignore unknown fields are unaffected.
+    status: Optional[str] = None
+    duration_minutes: Optional[int] = None
 
     class Config:
         from_attributes = True
+
+
+# ── Manual Attendance (check-in / check-out) ─────────────────────────────────
+# New, additive schemas for the manual attendance system. These do not
+# replace AttendanceCreate/AttendanceOut above (which stay untouched for the
+# pre-existing endpoints) — they back the new /api/attendance/check-in,
+# /check-out, /today, /member/{id}, /history/{id} and /dashboard-summary
+# endpoints only.
+
+ATTENDANCE_STATUS_IN = "IN"
+ATTENDANCE_STATUS_OUT = "OUT"
+
+
+class CheckInRequest(BaseModel):
+    member_id: int
+
+
+class CheckOutRequest(BaseModel):
+    member_id: int
+
+
+class AttendanceRecordOut(BaseModel):
+    id: int
+    member_id: int
+    member_name: Optional[str] = None
+    attendance_date: date
+    check_in: Optional[datetime] = None
+    check_out: Optional[datetime] = None
+    duration_minutes: Optional[int] = None
+    status: str
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class AttendanceDashboardSummary(BaseModel):
+    today_checkins: int
+    today_checkouts: int
+    members_currently_inside: int
+    average_workout_minutes: float
 
 
 # ── Dashboard ─────────────────────────────────────────────────────────────────
