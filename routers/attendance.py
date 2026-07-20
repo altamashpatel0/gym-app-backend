@@ -111,6 +111,12 @@ def mark_attendance(
 ):
     now = datetime.now(IST)
     today = now.date()
+    # Store a naive IST wall-clock value (not tz-aware) — the check_in/
+    # created_at/updated_at columns are plain DateTime (no timezone type),
+    # and passing a tz-aware datetime causes psycopg2/Postgres to normalize
+    # it to UTC on write (session TimeZone defaults to UTC), which is the
+    # root cause of check-in times being stored ~5h30m off.
+    now_naive = now.replace(tzinfo=None)
     # Prevent duplicate same-day check-in
     existing = db.query(Attendance).filter(
         Attendance.member_id == data.member_id,
@@ -121,10 +127,10 @@ def mark_attendance(
     record = Attendance(
         member_id=data.member_id,
         marked_by=current_user.id,
-        check_in=now,
+        check_in=now_naive,
         date=today,
-        created_at=now,
-        updated_at=now,
+        created_at=now_naive,
+        updated_at=now_naive,
     )
     db.add(record)
     db.commit()
@@ -138,8 +144,9 @@ def checkout(attendance_id: int, db: Session = Depends(get_db), _=Depends(get_cu
     if not record:
         raise HTTPException(404, "Not found")
     now = datetime.now(IST)
-    record.check_out = now
-    record.updated_at = now
+    now_naive = now.replace(tzinfo=None)  # see note in mark_attendance() above
+    record.check_out = now_naive
+    record.updated_at = now_naive
     db.commit()
     return {"message": "Checked out"}
 

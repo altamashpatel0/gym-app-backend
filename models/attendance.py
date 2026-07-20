@@ -4,19 +4,27 @@ from database import Base
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-# Timezone-aware India Standard Time. Used as the Python-side (client-side)
-# default for every attendance timestamp column below. SQLAlchemy always
-# computes a Python-side `default` and includes it directly in the INSERT
-# statement, so these IST values take precedence over the DB-side
-# `server_default` (which stays only as a harmless fallback for any
-# non-ORM insert path — it is never actually reached by this app, so no
-# UTC calculation from it ever ends up in attendance data). This does NOT
-# alter the existing database schema/columns in any way.
+# India Standard Time.
 IST = ZoneInfo("Asia/Kolkata")
 
 
 def _ist_now() -> datetime:
-    return datetime.now(IST)
+    # IMPORTANT: the check_in/check_out/created_at/updated_at columns below
+    # are plain `DateTime` (no `timezone=True`), i.e. Postgres TIMESTAMP
+    # WITHOUT TIME ZONE. psycopg2 adapts any *tz-aware* Python datetime by
+    # casting it to `::timestamptz` in the SQL it sends, and Postgres then
+    # normalizes that value using the connection's session `TimeZone`
+    # setting (which defaults to UTC, and cannot be reliably forced via
+    # `SET TIME ZONE` on every hosted/pooled Postgres setup) before storing
+    # it — silently shifting a 4:00 PM IST write into ~10:30 AM.
+    #
+    # Returning a *naive* datetime here (tzinfo stripped after computing the
+    # correct IST wall-clock value) avoids that cast entirely: psycopg2 sends
+    # it as a plain, zone-less literal, so Postgres stores exactly the wall-
+    # clock value we computed — independent of session timezone, connection
+    # pooling, or hosting provider. No schema change; this only changes what
+    # value is written into the existing DateTime columns.
+    return datetime.now(IST).replace(tzinfo=None)
 
 
 def _ist_today():

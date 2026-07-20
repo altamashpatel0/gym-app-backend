@@ -96,13 +96,16 @@ def check_in(db: Session, member_id: int) -> dict:
         raise HTTPException(status_code=400, detail="Member has already checked in today")
 
     now = datetime.now(IST)
+    # Store a naive IST wall-clock value — see models/attendance.py::_ist_now
+    # for why a tz-aware value here gets silently shifted to UTC on write.
+    now_naive = now.replace(tzinfo=None)
     record = Attendance(
         member_id=member_id,
-        check_in=now,
+        check_in=now_naive,
         date=_ist_today(),
         status=ATTENDANCE_STATUS_IN,
-        created_at=now,
-        updated_at=now,
+        created_at=now_naive,
+        updated_at=now_naive,
     )
     db.add(record)
     db.commit()
@@ -124,9 +127,10 @@ def check_out(db: Session, member_id: int) -> dict:
         raise HTTPException(status_code=400, detail="Member has not checked in today")
 
     now = datetime.now(IST)
-    record.check_out = now
+    now_naive = now.replace(tzinfo=None)  # see models/attendance.py::_ist_now
+    record.check_out = now_naive
     record.status = ATTENDANCE_STATUS_OUT
-    record.updated_at = now
+    record.updated_at = now_naive
     if record.check_in:
         # The DB column is a plain DateTime (no timezone type), so a
         # value written as IST-aware can come back from the DB as naive
