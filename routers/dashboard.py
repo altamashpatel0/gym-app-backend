@@ -1,8 +1,14 @@
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func, cast, Date
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 from decimal import Decimal
+
+# Timezone-aware India Standard Time, used specifically for the attendance
+# figure below so it reflects the IST calendar day (attendance data is
+# recorded in IST — see models/attendance.py / services/attendance_service.py).
+IST = ZoneInfo("Asia/Kolkata")
 from typing import List, Optional
 from database import get_db
 from models import Member, Payment, Attendance
@@ -71,8 +77,9 @@ def dashboard_stats(
     if shift_norm:
         attendance_q = attendance_q.filter(func.lower(Member.shift) == shift_norm)
 
+    today_ist = datetime.now(IST).date()
     today_att = attendance_q.filter(
-        Attendance.date == today
+        Attendance.date == today_ist
     ).with_entities(func.count(Attendance.id)).scalar() or 0
 
     # Day/Night member counts — ALWAYS computed across ALL members,

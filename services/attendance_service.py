@@ -35,6 +35,18 @@ from schemas import ATTENDANCE_STATUS_IN, ATTENDANCE_STATUS_OUT
 IST = ZoneInfo("Asia/Kolkata")
 
 
+def _ist_today() -> date:
+    """Current calendar date in India Standard Time.
+
+    Deliberately NOT `date.today()`, which returns the date in the
+    server's local/system timezone (UTC on most hosts). Using that would
+    roll the attendance day over at UTC midnight — i.e. 5:30 AM IST —
+    instead of at real IST midnight. Every "today" used by attendance
+    logic must go through this helper instead.
+    """
+    return datetime.now(IST).date()
+
+
 def _get_member_or_404(db: Session, member_id: int) -> Member:
     member = db.query(Member).filter(Member.id == member_id).first()
     if not member:
@@ -45,7 +57,7 @@ def _get_member_or_404(db: Session, member_id: int) -> Member:
 def _today_record(db: Session, member_id: int, for_update: bool = False) -> Optional[Attendance]:
     q = db.query(Attendance).filter(
         Attendance.member_id == member_id,
-        Attendance.date == date.today(),
+        Attendance.date == _ist_today(),
     )
     if for_update:
         q = q.with_for_update()
@@ -87,8 +99,10 @@ def check_in(db: Session, member_id: int) -> dict:
     record = Attendance(
         member_id=member_id,
         check_in=now,
-        date=date.today(),
+        date=_ist_today(),
         status=ATTENDANCE_STATUS_IN,
+        created_at=now,
+        updated_at=now,
     )
     db.add(record)
     db.commit()
@@ -112,6 +126,7 @@ def check_out(db: Session, member_id: int) -> dict:
     now = datetime.now(IST)
     record.check_out = now
     record.status = ATTENDANCE_STATUS_OUT
+    record.updated_at = now
     if record.check_in:
         # The DB column is a plain DateTime (no timezone type), so a
         # value written as IST-aware can come back from the DB as naive
@@ -139,7 +154,7 @@ def get_today(db: Session) -> List[dict]:
     records = (
         db.query(Attendance)
         .options(joinedload(Attendance.member))
-        .filter(Attendance.date == date.today())
+        .filter(Attendance.date == _ist_today())
         .order_by(Attendance.check_in.desc())
         .all()
     )
@@ -151,7 +166,7 @@ def get_member_today(db: Session, member_id: int) -> Optional[dict]:
     record = (
         db.query(Attendance)
         .options(joinedload(Attendance.member))
-        .filter(Attendance.member_id == member_id, Attendance.date == date.today())
+        .filter(Attendance.member_id == member_id, Attendance.date == _ist_today())
         .first()
     )
     return _to_record_out(record) if record else None
@@ -170,7 +185,7 @@ def get_history(db: Session, member_id: int) -> List[dict]:
 
 
 def get_dashboard_summary(db: Session) -> dict:
-    today = date.today()
+    today = _ist_today()
     base_q = db.query(Attendance).filter(Attendance.date == today)
 
     today_checkins = base_q.with_entities(func.count(Attendance.id)).scalar() or 0

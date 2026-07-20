@@ -76,7 +76,7 @@ def member_attendance_history(
 
 @router.get("/today", response_model=List[AttendanceOut])
 def today_attendance(db: Session = Depends(get_db), _=Depends(get_current_user)):
-    today = date.today()
+    today = datetime.now(IST).date()
     return (
         db.query(Attendance)
         .options(joinedload(Attendance.member))
@@ -109,14 +109,23 @@ def mark_attendance(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    now = datetime.now(IST)
+    today = now.date()
     # Prevent duplicate same-day check-in
     existing = db.query(Attendance).filter(
         Attendance.member_id == data.member_id,
-        Attendance.date == date.today()
+        Attendance.date == today
     ).first()
     if existing:
         raise HTTPException(400, "Already checked in today")
-    record = Attendance(member_id=data.member_id, marked_by=current_user.id)
+    record = Attendance(
+        member_id=data.member_id,
+        marked_by=current_user.id,
+        check_in=now,
+        date=today,
+        created_at=now,
+        updated_at=now,
+    )
     db.add(record)
     db.commit()
     db.refresh(record)
@@ -128,7 +137,9 @@ def checkout(attendance_id: int, db: Session = Depends(get_db), _=Depends(get_cu
     record = db.query(Attendance).filter(Attendance.id == attendance_id).first()
     if not record:
         raise HTTPException(404, "Not found")
-    record.check_out = datetime.now(IST)
+    now = datetime.now(IST)
+    record.check_out = now
+    record.updated_at = now
     db.commit()
     return {"message": "Checked out"}
 
