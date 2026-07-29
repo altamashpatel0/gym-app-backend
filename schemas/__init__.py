@@ -147,6 +147,15 @@ class MemberOut(BaseModel):
     created_at: datetime
     shift: str = "Day"  # NEW: always returned so the frontend can badge/filter on it
 
+    # ── Attendance Pause (NEW, separate from `status`) ─────────────────────────
+    # Read-only here — only ever changed via the dedicated
+    # /pause-attendance and /resume-attendance endpoints, never through
+    # MemberCreate/MemberUpdate.
+    attendance_paused: bool = False
+    attendance_pause_reason: Optional[str] = None
+    attendance_paused_at: Optional[datetime] = None
+    # ─────────────────────────────────────────────────────────────────────────
+
     class Config:
         from_attributes = True
 
@@ -155,6 +164,17 @@ class MemberListOut(BaseModel):
     total: int
     page: int
     limit: int
+
+
+class PauseAttendanceRequest(BaseModel):
+    reason: str
+
+    @field_validator("reason")
+    @classmethod
+    def validate_reason(cls, v):
+        if not v or not v.strip():
+            raise ValueError("A reason is required to pause attendance.")
+        return v.strip()
 
 
 # ── Payments ──────────────────────────────────────────────────────────────────
