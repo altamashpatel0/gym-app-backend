@@ -2,13 +2,22 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import or_, func
 from typing import Optional, List
-from datetime import date
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 from database import get_db
 from models import Member, User
-from schemas import MemberCreate, MemberUpdate, MemberOut, MemberListOut, DueMemberOut
+from schemas import (
+    MemberCreate, MemberUpdate, MemberOut, MemberListOut, DueMemberOut,
+    PauseAttendanceRequest,
+)
 from core.deps import get_current_user, owner_or_admin
 
 router = APIRouter(prefix="/api/members", tags=["members"])
+
+# Attendance Pause timestamps are recorded in India Standard Time, same
+# convention as services/attendance_service.py, so "Paused At" reads
+# consistently with check-in/check-out times shown elsewhere in the app.
+IST = ZoneInfo("Asia/Kolkata")
 
 
 @router.get("/due-members", response_model=List[DueMemberOut])
@@ -105,6 +114,54 @@ def get_member(
     if not member:
         raise HTTPException(status_code=404, detail="Member not found")
     return member
+
+
+@router.patch("/{member_id}/pause-attendance", response_model=MemberOut)
+def pause_attendance(
+    member_id: int,
+    data: PauseAttendanceRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Manually pause a member's ability to check in for attendance.
+
+    This is NOT member.status. It never touches status, payments, renewal,
+    or attendance history/calculations — it only sets the three new
+    attendance_paused* columns. Only ever triggered by an explicit owner
+    action here; nothing in the codebase sets this automatically.
+    """
+    member = db.query(Member).filter(Member.id == member_id).first()
+    if not member:
+        raise HTTPException(status_code=404, detail="Member not found")
+
+    member.attendance_paused = True
+    member.attendance_pause_reason = data.reason
+    member.attendance_paused_at = datetime.now(IST).replace(tzinfo=None)
+
+    db.commit()
+    db.refresh(member)
+    return db.query(Member).options(joinedload(Member.plan)).filter(Member.id == member_id).first()
+
+
+@router.patch("/{member_id}/resume-attendance", response_model=MemberOut)
+def resume_attendance(
+    member_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Manually resume a member's ability to check in for attendance."""
+    member = db.query(Member).filter(Member.id == member_id).first()
+    if not member:
+        raise HTTPException(status_code=404, detail="Member not found")
+
+    member.attendance_paused = False
+    member.attendance_pause_reason = None
+    member.attendance_paused_at = None
+
+    db.commit()
+    db.refresh(member)
+    return db.query(Member).options(joinedload(Member.plan)).filter(Member.id == member_id).first()
 
 
 @router.put("/{member_id}", response_model=MemberOut)

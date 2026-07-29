@@ -12,11 +12,18 @@ WHY CHANGED:
 """
 
 from __future__ import annotations
-from datetime import date
+from datetime import date, datetime
 from typing   import Optional
 from pydantic import BaseModel, field_validator
 
 from models.member import ShiftEnum   # single source of truth
+
+
+# ── Attendance Pause reasons (frontend dropdown mirrors this list) ───────────
+# Kept as a plain string on the wire (not a DB/model enum) since the reason is
+# just a free-form note the owner picks — matches the "Other" option in the
+# UI dropdown, which needs to accept arbitrary text.
+ATTENDANCE_PAUSE_REASONS = ["Payment Due", "Medical Leave", "Membership Hold", "Other"]
 
 
 # ── Create ────────────────────────────────────────────────────────────────────
@@ -116,4 +123,26 @@ class MemberResponse(BaseModel):
     shift: ShiftEnum = ShiftEnum.DAY
     # ─────────────────────────────────────────────────────────────────────────
 
+    # ── NEW: Attendance Pause (separate from `status`) ─────────────────────────
+    # Read-only here — these are only ever changed via the dedicated
+    # /pause-attendance and /resume-attendance endpoints below, never through
+    # MemberCreate/MemberUpdate, so there's no write path to set them by
+    # accident from the regular add/edit member form.
+    attendance_paused: bool = False
+    attendance_pause_reason: Optional[str] = None
+    attendance_paused_at: Optional[datetime] = None
+    # ─────────────────────────────────────────────────────────────────────────
+
     model_config = {"from_attributes": True}
+
+
+# ── Attendance Pause request/response ────────────────────────────────────────
+class PauseAttendanceRequest(BaseModel):
+    reason: str
+
+    @field_validator("reason")
+    @classmethod
+    def validate_reason(cls, v):
+        if not v or not v.strip():
+            raise ValueError("A reason is required to pause attendance.")
+        return v.strip()

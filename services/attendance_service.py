@@ -85,7 +85,13 @@ def _to_record_out(record: Attendance) -> dict:
 
 
 def check_in(db: Session, member_id: int) -> dict:
-    _get_member_or_404(db, member_id)
+    member = _get_member_or_404(db, member_id)
+
+    # Attendance Pause — a completely separate, owner-controlled flag from
+    # member.status. Only blocks NEW check-ins; checkout below is untouched
+    # so anyone already checked in today can still check out normally.
+    if member.attendance_paused:
+        raise HTTPException(status_code=400, detail="Attendance is paused for this member.")
 
     existing = _today_record(db, member_id)
     if existing and existing.status == ATTENDANCE_STATUS_IN:
