@@ -38,6 +38,20 @@ class Member(Base):
     attendance_paused_at = Column(DateTime, nullable=True)
     # ─────────────────────────────────────────────────────────────────────────
 
+    # ── B2 Photo Migration (NEW) ────────────────────────────────────────────
+    # Stores only the Backblaze B2 *object key* (e.g.
+    # "members/photos/191/profile-v1723..."), never a presigned URL — the
+    # bucket is private, so presigned URLs are generated fresh on every read
+    # (see routers/members.py::_resolve_photo_url) and are never persisted.
+    #
+    # NULL for every pre-existing member — those rows keep using their
+    # existing Cloudinary `photo_url` untouched. Only newly-uploaded photos
+    # (via POST /api/members/{id}/photo) populate this column, at which point
+    # it takes precedence over `photo_url` when building API responses.
+    # See migrations/005_add_photo_storage_key.sql.
+    photo_storage_key = Column(Text, nullable=True)
+    # ─────────────────────────────────────────────────────────────────────────
+
     assigned_trainer_id = Column(Integer, ForeignKey("users.id"))
     created_by = Column(Integer, ForeignKey("users.id"))
     created_at = Column(DateTime, server_default=func.now())

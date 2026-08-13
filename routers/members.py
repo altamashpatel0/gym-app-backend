@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import or_, func
@@ -11,6 +13,9 @@ from schemas import (
     PauseAttendanceRequest,
 )
 from core.deps import get_current_user, owner_or_admin
+from services.b2_storage import get_b2_storage_service
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/members", tags=["members"])
 
@@ -18,6 +23,45 @@ router = APIRouter(prefix="/api/members", tags=["members"])
 # convention as services/attendance_service.py, so "Paused At" reads
 # consistently with check-in/check-out times shown elsewhere in the app.
 IST = ZoneInfo("Asia/Kolkata")
+
+
+# ---------------------------------------------------------------------------
+# Photo URL resolution (Cloudinary <-> B2 backward compatibility)
+# ---------------------------------------------------------------------------
+#
+# `Member.photo_url` (the raw DB column) is only ever authoritative for
+# members who still have their ORIGINAL Cloudinary photo. Members with a
+# NEW photo have `photo_storage_key` set instead — the B2 bucket is
+# private, so we must generate a fresh, time-limited presigned URL on every
+# read rather than persisting one.
+#
+# IMPORTANT: this builds the Pydantic `MemberOut` object explicitly and
+# overrides `.photo_url` on THAT object — it never mutates the SQLAlchemy
+# `Member` instance's `photo_url` attribute. That guarantees a presigned URL
+# can never accidentally get flushed/committed back to Postgres.
+def _to_member_out(member: Member) -> MemberOut:
+    resp = MemberOut.model_validate(member)
+
+    storage_key = getattr(member, "photo_storage_key", None)
+    if storage_key:
+        try:
+            resp.photo_url = get_b2_storage_service().generate_presigned_url(storage_key)
+        except Exception as exc:
+            # Never fail a member read just because URL refresh failed —
+            # log it and fall back to no photo rather than a stale/broken one.
+            logger.warning(
+                "Could not generate B2 presigned URL for member %s (key=%s): %s",
+                member.id, storage_key, exc,
+            )
+            resp.photo_url = None
+    # else: storage_key is None -> resp.photo_url already holds the
+    # member's original Cloudinary URL (or None), untouched.
+
+    return resp
+
+
+def _to_member_out_list(members: list[Member]) -> list[MemberOut]:
+    return [_to_member_out(m) for m in members]
 
 
 @router.get("/due-members", response_model=List[DueMemberOut])
@@ -88,7 +132,7 @@ def list_members(
         q = q.filter(func.lower(Member.shift) == shift.lower())
     total = q.count()
     items = q.order_by(Member.created_at.desc()).offset((page - 1) * limit).limit(limit).all()
-    return MemberListOut(items=items, total=total, page=page, limit=limit)
+    return MemberListOut(items=_to_member_out_list(items), total=total, page=page, limit=limit)
 
 
 @router.post("", response_model=MemberOut)
@@ -101,7 +145,8 @@ def create_member(
     db.add(member)
     db.commit()
     db.refresh(member)
-    return db.query(Member).options(joinedload(Member.plan)).filter(Member.id == member.id).first()
+    member = db.query(Member).options(joinedload(Member.plan)).filter(Member.id == member.id).first()
+    return _to_member_out(member)
 
 
 @router.get("/{member_id}", response_model=MemberOut)
@@ -113,7 +158,7 @@ def get_member(
     member = db.query(Member).options(joinedload(Member.plan)).filter(Member.id == member_id).first()
     if not member:
         raise HTTPException(status_code=404, detail="Member not found")
-    return member
+    return _to_member_out(member)
 
 
 @router.patch("/{member_id}/pause-attendance", response_model=MemberOut)
@@ -141,7 +186,8 @@ def pause_attendance(
 
     db.commit()
     db.refresh(member)
-    return db.query(Member).options(joinedload(Member.plan)).filter(Member.id == member_id).first()
+    member = db.query(Member).options(joinedload(Member.plan)).filter(Member.id == member_id).first()
+    return _to_member_out(member)
 
 
 @router.patch("/{member_id}/resume-attendance", response_model=MemberOut)
@@ -161,7 +207,8 @@ def resume_attendance(
 
     db.commit()
     db.refresh(member)
-    return db.query(Member).options(joinedload(Member.plan)).filter(Member.id == member_id).first()
+    member = db.query(Member).options(joinedload(Member.plan)).filter(Member.id == member_id).first()
+    return _to_member_out(member)
 
 
 @router.put("/{member_id}", response_model=MemberOut)
@@ -178,7 +225,8 @@ def update_member(
         setattr(member, field, value)
     db.commit()
     db.refresh(member)
-    return db.query(Member).options(joinedload(Member.plan)).filter(Member.id == member_id).first()
+    member = db.query(Member).options(joinedload(Member.plan)).filter(Member.id == member_id).first()
+    return _to_member_out(member)
 
 
 @router.delete("/{member_id}")

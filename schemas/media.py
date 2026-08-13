@@ -43,7 +43,7 @@ class MemberDocumentOut(BaseModel):
     member_id: int
     document_name: str
     document_type: str
-    file_url: str                    # view URL (renderable in browser for images)
+    file_url: Optional[str]          # view URL (renderable in browser for images)
     download_url: Optional[str]      # force-download URL
     mime_type: Optional[str]
     uploaded_at: datetime
