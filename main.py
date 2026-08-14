@@ -56,3 +56,14 @@ app.include_router(media_router)
 @app.get("/")
 def root():
     return {"status": "GymOps API running"}
+
+
+# --------------------------------------------------------------------------
+# Health check (Render free-tier keep-alive)
+# --------------------------------------------------------------------------
+# Public, unauthenticated, no DB / B2 / Cloudinary access, no background jobs.
+# Intended to be pinged by an EXTERNAL uptime monitor (not an internal timer)
+# on an interval shorter than Render's 15-minute free-tier idle timeout.
+@app.get("/health")
+def health_check():
+    return {"status": "ok", "service": "gymops-api"}
